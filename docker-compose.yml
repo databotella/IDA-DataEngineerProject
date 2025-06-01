@@ -13,7 +13,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
     ports:
       - "5432:5432"
 
@@ -23,12 +22,20 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./etl_ida_sysint.py:/app/etl_ida_sysint.py
+      - ./etl:/app
       - ./init_db.py:/app/init_db.py
       - ./schema_star.sql:/app/schema_star.sql
-      - ./requirements.txt:/app/requirements.txt
     working_dir: /app
     environment:
       - PYTHONUNBUFFERED=1
     command: >
-      sh -c "pip install -r requirements.txt && python init_db.py && python etl_ida_sysint.py"
+      sh -c "pip install -r requirements.txt && python init_db.py && python etl_ida.py"
+
+  docs:
+    build: ./etl
+    volumes:
+      - ./docs:/docs
+    ports:
+      - "8080:8080"
+    command: >
+      sh -c "python -m pydoc -w etl_ida && mv etl_ida.html /docs/ && python -m pydoc -p 8080 etl_ida"
