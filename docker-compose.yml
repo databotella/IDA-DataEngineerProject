@@ -23,11 +23,11 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./etl-ida-sysint.py:/app/etl-ida-sysint.py
+      - ./etl_ida_sysint.py:/app/etl_ida_sysint.py
       - ./init_db.py:/app/init_db.py
       - ./requirements.txt:/app/requirements.txt
     working_dir: /app
     environment:
       - PYTHONUNBUFFERED=1
     command: >
-      sh -c "pip install -r requirements.txt && python init_db.py && python etl-ida-sysint.py"
+      sh -c "pip install -r requirements.txt && python init_db.py && python etl_ida_sysint.py"
