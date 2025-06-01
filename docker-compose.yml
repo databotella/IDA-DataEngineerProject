@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.5-bookworm
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -8,26 +8,26 @@ services:
     volumes:
       - ./init_db.py:/docker-entrypoint-initdb.d/init_db.py
       - ./schema_star.sql:/schema_star.sql
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+    ports:
+      - "5432:5432"
+
   etl:
-    image: python:3.11-slim
+    image: python:3.11.12-bookworm
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - ./python_etl_ida.py:/app/etl_ida.py
+      - ./etl-ida-sysint.py:/app/etl-ida-sysint.py
+      - ./init_db.py:/app/init_db.py
       - ./requirements.txt:/app/requirements.txt
     working_dir: /app
     environment:
       - PYTHONUNBUFFERED=1
     command: >
-      sh -c "pip install -r requirements.txt &&
-             sed -i \"s|postgres://postgres:aPLQOOYuJClt3jdN1BdtC9U8F10zGtwb%40@212.85.21.2:3010/idadatamart|postgresql://postgres:postgres@postgres:5432/idadatamart|g\" etl_ida.py &&
-             python etl_ida.py"
+      sh -c "pip install -r requirements.txt && python init_db.py && python etl-ida-sysint.py"

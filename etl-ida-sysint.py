@@ -7,16 +7,15 @@ ETL IDA - Sistema de Extração, Transformação e Carga de Dados
 Este módulo implementa o processo ETL para carregar dados do Índice de 
 Desempenho no Atendimento (IDA) da ANATEL no Data Mart PostgreSQL.
 
-O sistema processa arquivos ODS contendo métricas de desempenho das
-operadoras de telecomunicações e carrega os dados normalizados na
-tabela fact_ida do banco de dados.
+O sistema baixa e processa arquivos ODS diretamente na memória,
+sem necessidade de armazenamento em disco.
 
 Classes:
     BaseExtractor: Classe base para extração de dados
     ODSExtractor: Extrator especializado para arquivos ODS
     DataTransformer: Transformador de dados para formato normalizado
     PostgreSQLLoader: Carregador de dados no PostgreSQL
-    ETLPipeline: Orquestrador do pipeline ETL
+    ETLPipeline: Orquestrador do pipeline ETL com download via API
 
 Exemplo de uso:
     >>> pipeline = ETLPipeline()
@@ -24,18 +23,20 @@ Exemplo de uso:
 
 Autor: beAnalytic Team
 Data: 2024
-Versão: 1.0.0
+Versão: 2.0.0
 """
 
 import os
 import sys
 import logging
 import hashlib
+import requests
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from pathlib import Path
+from io import BytesIO
 
 import pandas as pd
 import numpy as np
@@ -66,14 +67,25 @@ class ETLConfig:
     
     Attributes:
         db_connection_string: String de conexão PostgreSQL
-        data_path: Caminho para os arquivos de dados
         batch_size: Tamanho do lote para inserção em batch
         max_retries: Número máximo de tentativas em caso de erro
+        api_key: Chave de API para dados.gov.br
     """
-    db_connection_string: str = "postgres://postgres:aPLQOOYuJClt3jdN1BdtC9U8F10zGtwb%40@212.85.21.2:3010/idadatamart"
-    data_path: str = "./data"
+    db_connection_string: str = "postgresql://postgres:postgres@postgres:5432/idadatamart"
     batch_size: int = 1000
     max_retries: int = 3
+    api_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJVZ0lfQkVMbkdHakM3eGl5d3pOQWRfWHRDODdaX0NXQmdNQnBObVB0ZktBeW85QmRVZGdTemF6N1hmT2tEako4cGlQQTVtaUViYmpQNEFYOSIsImlhdCI6MTc0ODcwMjM3N30.w-TGAteMgx2tW8O-UO_1XWjR4TZMgqAtFMbvWeE1VUo"
+
+
+@dataclass
+class RecursoIDA:
+    """Dados de um recurso IDA da ANATEL."""
+    id: str
+    titulo: str
+    url: str
+    formato: str
+    ano: int
+    servico: str
 
 
 @dataclass
@@ -124,11 +136,12 @@ class BaseExtractor(ABC):
         self.logger = logging.getLogger(self.__class__.__name__)
     
     @abstractmethod
-    def extract(self, file_path: str) -> pd.DataFrame:
-        """Extrai dados do arquivo especificado.
+    def extract(self, file_content: BytesIO, metadata: Dict[str, Any]) -> pd.DataFrame:
+        """Extrai dados do conteúdo do arquivo.
         
         Args:
-            file_path: Caminho para o arquivo
+            file_content: Conteúdo do arquivo em memória
+            metadata: Metadados do arquivo (nome, serviço, etc)
             
         Returns:
             pd.DataFrame: Dados extraídos
@@ -143,20 +156,11 @@ class ODSExtractor(BaseExtractor):
     extraindo dados das planilhas específicas de cada serviço.
     """
     
-    # Mapeamento de arquivos para sheets e serviços
-    FILE_MAPPING = {
-        # 2017
-        'SMP_2017.ods': {'sheet': 'Móvel_Pessoal', 'service': 'SMP'},
-        'SCM_2017.ods': {'sheet': 'Banda_Larga_Fixa', 'service': 'SCM'},
-        'STFC_2017.ods': {'sheet': 'Telefonia_Fixa', 'service': 'STFC'},
-        # 2018
-        'SMP_2018.ods': {'sheet': 'Móvel_Pessoal', 'service': 'SMP'},
-        'SCM_2018.ods': {'sheet': 'Banda_Larga_Fixa', 'service': 'SCM'},
-        'STFC_2018.ods': {'sheet': 'Telefonia_Fixa', 'service': 'STFC'},
-        # 2019
-        'SMP_2019.ods': {'sheet': 'Móvel_Pessoal', 'service': 'SMP'},
-        'SCM_2019.ods': {'sheet': 'Banda_Larga_Fixa', 'service': 'SCM'},
-        'STFC_2019.ods': {'sheet': 'Telefonia_Fixa', 'service': 'STFC'}
+    # Mapeamento de sheets por serviço
+    SHEET_MAPPING = {
+        'SMP': 'Móvel_Pessoal',
+        'SCM': 'Banda_Larga_Fixa', 
+        'STFC': 'Telefonia_Fixa'
     }
     
     # Mapeamento de nomes de variáveis para códigos padronizados
@@ -175,59 +179,45 @@ class ODSExtractor(BaseExtractor):
         'Taxa de Respondidas no Período': 'TAXA_RESP_PERIODO'
     }
     
-    def extract(self, file_path: str) -> pd.DataFrame:
-        """Extrai dados de um arquivo ODS.
+    def extract(self, file_content: BytesIO, metadata: Dict[str, Any]) -> pd.DataFrame:
+        """Extrai dados de um arquivo ODS em memória.
         
         Args:
-            file_path: Caminho para o arquivo ODS
+            file_content: Conteúdo do arquivo ODS em memória
+            metadata: Dicionário com 'filename', 'servico'
             
         Returns:
             pd.DataFrame: Dados extraídos com colunas padronizadas
-            
-        Raises:
-            ValueError: Se o arquivo não for encontrado no mapeamento
-            FileNotFoundError: Se o arquivo não existir
         """
-        filename = os.path.basename(file_path)
+        servico = metadata['servico']
+        filename = metadata['filename']
+        sheet_name = self.SHEET_MAPPING.get(servico)
         
-        if filename not in self.FILE_MAPPING:
-            raise ValueError(f"Arquivo {filename} não está no mapeamento conhecido")
+        if not sheet_name:
+            raise ValueError(f"Serviço {servico} não tem mapeamento de sheet")
         
-        mapping = self.FILE_MAPPING[filename]
-        self.logger.info(f"Extraindo dados de {file_path} - Sheet: {mapping['sheet']}")
+        self.logger.info(f"Extraindo dados de {filename} - Sheet: {sheet_name}")
         
         try:
             # Lê o arquivo sem header para analisar a estrutura
             df_raw = pd.read_excel(
-                file_path,
-                sheet_name=mapping['sheet'],
+                file_content,
+                sheet_name=sheet_name,
                 header=None,
                 engine='odf'
             )
             
-            # Encontra a linha de cabeçalho (por texto ou datas)
-            header_row = None
-            for idx in range(min(20, len(df_raw))):
-                row_values = df_raw.iloc[idx].astype(str)
-                normalized = [str(v).strip().upper() for v in row_values]
-                # identifica cabeçalho por colunas de texto
-                if any('GRUPO' in v for v in normalized) and any('VARIAVEL' in v for v in normalized):
-                    header_row = idx
-                    break
-                # identifica cabeçalho por padrão YYYY-MM
-                if any(re.search(r'\d{4}-\d{2}', v) for v in normalized):
-                    header_row = idx
-                    break
-            if header_row is None:
-                header_row = 8
-                self.logger.warning(f"Header não detectado automaticamente, usando linha {header_row}")
-            else:
-                self.logger.info(f"Linha de cabeçalho encontrada: {header_row}")
+            # Volta ao início do arquivo para próxima leitura
+            file_content.seek(0)
+            
+            # Encontra a linha de cabeçalho
+            header_row = self._find_header_row(df_raw)
+            self.logger.info(f"Linha de cabeçalho encontrada: {header_row}")
             
             # Lê novamente com o header correto
             df = pd.read_excel(
-                file_path,
-                sheet_name=mapping['sheet'],
+                file_content,
+                sheet_name=sheet_name,
                 header=header_row,
                 engine='odf'
             )
@@ -240,30 +230,43 @@ class ODSExtractor(BaseExtractor):
                 df.columns = columns
             
             # Adiciona informações do serviço como atributos
-            df['SERVICO'] = mapping['service']
+            df['SERVICO'] = servico
             df['ARQUIVO_ORIGEM'] = filename
+            
             # Preenche grupos faltantes (repetidos no arquivo)
             df['GRUPO_ECONOMICO'] = df['GRUPO_ECONOMICO'].ffill()
             
             self.logger.info(f"Extraídos {len(df)} registros de {filename}")
-            self.logger.info(f"Colunas: {df.columns.tolist()[:5]}...")
             
             return df
             
         except Exception as e:
-            self.logger.error(f"Erro ao extrair dados de {file_path}: {str(e)}")
+            self.logger.error(f"Erro ao extrair dados: {str(e)}")
             raise
+    
+    def _find_header_row(self, df_raw: pd.DataFrame) -> int:
+        """Encontra a linha de cabeçalho no DataFrame."""
+        for idx in range(min(20, len(df_raw))):
+            row_values = df_raw.iloc[idx].astype(str)
+            normalized = [str(v).strip().upper() for v in row_values]
+            
+            # identifica cabeçalho por colunas de texto
+            if any('GRUPO' in v for v in normalized) and any('VARIAVEL' in v for v in normalized):
+                return idx
+            
+            # identifica cabeçalho por padrão YYYY-MM
+            if any(re.search(r'\d{4}-\d{2}', v) for v in normalized):
+                return idx
+        
+        # Valor padrão
+        return 8
 
 
 class DataTransformer:
     """Transformador de dados para formato normalizado.
     
     Realiza a transformação dos dados extraídos para o formato
-    normalizado esperado pelo banco de dados, incluindo:
-    - Unpivot de colunas de meses
-    - Padronização de nomes
-    - Limpeza de valores
-    - Validação de dados
+    normalizado esperado pelo banco de dados.
     """
     
     def __init__(self, config: ETLConfig):
@@ -277,11 +280,6 @@ class DataTransformer:
     
     def transform(self, df: pd.DataFrame) -> List[DataRecord]:
         """Transforma DataFrame em lista de registros normalizados.
-        
-        A estrutura dos dados é:
-        - Coluna A (GRUPO_ECONOMICO): Contém o nome do grupo
-        - Coluna B (VARIAVEL): Contém o nome da variável
-        - Demais colunas: Contém os valores para cada mês (2018-01, 2018-02, etc.)
         
         Args:
             df: DataFrame com dados extraídos
@@ -297,6 +295,7 @@ class DataTransformer:
         # Identifica colunas de meses
         month_columns = [col for col in df.columns if self._is_month_column(col)]
         self.logger.info(f"Colunas de meses identificadas: {len(month_columns)} colunas")
+        
         if not month_columns:
             self.logger.error("Nenhuma coluna de mês encontrada!")
             return records
@@ -313,7 +312,6 @@ class DataTransformer:
             
             # Pula linhas sem grupo ou variável
             if not grupo or not variavel:
-                self.logger.debug(f"Linha {idx}: Pulando linha vazia")
                 continue
             
             # Limpa e padroniza o grupo
@@ -323,10 +321,7 @@ class DataTransformer:
             # Mapeia variável para código
             variavel_codigo = ODSExtractor.VARIABLE_MAPPING.get(variavel_limpa, variavel_limpa)
             
-            self.logger.debug(f"Linha {idx}: Grupo='{grupo_limpo}', Variável='{variavel_codigo}'")
-            
             # Processa cada mês
-            valores_processados = 0
             for month_col in month_columns:
                 try:
                     valor = row[month_col]
@@ -363,28 +358,16 @@ class DataTransformer:
                     )
                     
                     records.append(record)
-                    valores_processados += 1
                     
                 except Exception as e:
-                    self.logger.debug(f"Erro ao processar célula na linha {idx}, coluna {month_col}: {str(e)}")
-            
-            if valores_processados > 0:
-                self.logger.debug(f"Linha {idx}: {valores_processados} valores processados")
+                    self.logger.debug(f"Erro ao processar célula: {str(e)}")
         
         self.logger.info(f"Transformados {len(records)} registros")
         return records
     
     def _is_month_column(self, col: str) -> bool:
-        """Verifica se a coluna é um mês no formato YYYY-MM.
-        
-        Args:
-            col: Nome da coluna
-            
-        Returns:
-            bool: True se for coluna de mês
-        """
+        """Verifica se a coluna é um mês no formato YYYY-MM."""
         try:
-            # Converte para string e remove espaços
             col_str = str(col).strip()
             
             # Verifica formato YYYY-MM
@@ -392,7 +375,7 @@ class DataTransformer:
                 year, month = col_str.split('-')
                 return 2000 <= int(year) <= 2030 and 1 <= int(month) <= 12
             
-            # Verifica se é um Timestamp pandas (comum em arquivos Excel)
+            # Verifica se é um Timestamp pandas
             if hasattr(col, 'year') and hasattr(col, 'month'):
                 return True
                 
@@ -401,20 +384,11 @@ class DataTransformer:
             return False
     
     def _clean_text(self, text: Any) -> str:
-        """Limpa e padroniza texto.
-        
-        Args:
-            text: Texto a ser limpo
-            
-        Returns:
-            str: Texto limpo e padronizado
-        """
+        """Limpa e padroniza texto."""
         if pd.isna(text):
             return ""
         
         text = str(text).strip()
-        
-        # Remove espaços extras
         text = ' '.join(text.split())
         
         # Padroniza grupos econômicos conhecidos
@@ -434,20 +408,10 @@ class DataTransformer:
         return group_mapping.get(text, text)
     
     def _parse_value(self, value: Any) -> Optional[float]:
-        """Converte valor para float.
-        
-        Args:
-            value: Valor a ser convertido
-            
-        Returns:
-            Optional[float]: Valor convertido ou None se inválido
-        """
+        """Converte valor para float."""
         try:
-            # Remove caracteres não numéricos comuns
             if isinstance(value, str):
-                value = value.replace(',', '.')
-                value = value.replace('%', '')
-            
+                value = value.replace(',', '.').replace('%', '')
             return float(value)
         except:
             return None
@@ -456,12 +420,7 @@ class DataTransformer:
 class PostgreSQLLoader:
     """Carregador de dados no PostgreSQL.
     
-    Realiza a carga dos dados transformados no banco de dados,
-    incluindo:
-    - Pool de conexões
-    - Inserção em batch
-    - Controle de transações
-    - Tratamento de duplicatas
+    Realiza a carga dos dados transformados no banco de dados.
     """
     
     def __init__(self, config: ETLConfig):
@@ -495,9 +454,6 @@ class PostgreSQLLoader:
             
         Returns:
             int: Número de registros inseridos
-            
-        Raises:
-            psycopg2.Error: Em caso de erro no banco de dados
         """
         if not records:
             self.logger.warning("Nenhum registro para carregar")
@@ -532,30 +488,7 @@ class PostgreSQLLoader:
             self._connection_pool.putconn(conn)
     
     def _insert_batch(self, cursor, batch: List[DataRecord]) -> int:
-        """Insere um batch de registros.
-        
-        Args:
-            cursor: Cursor do banco de dados
-            batch: Lista de registros do batch
-            
-        Returns:
-            int: Número de registros inseridos
-        """
-        # Prepara dados para inserção
-        values = []
-        for record in batch:
-            values.append((
-                record.ano_mes,
-                record.grupo_economico,
-                record.servico,
-                record.variavel,
-                record.valor,
-                record.arquivo_origem,
-                record.linha_origem,
-                record.generate_hash()
-            ))
-        
-        # Query de inserção com lookup das chaves
+        """Insere um batch de registros."""
         insert_query = """
             INSERT INTO ida.fact_ida (
                 tempo_key,
@@ -589,18 +522,17 @@ class PostgreSQLLoader:
             ON CONFLICT (hash_registro) DO NOTHING
         """
         
-        # Executa inserções
         inserted = 0
-        for value in values:
+        for record in batch:
             params = {
-                'ano_mes': value[0],
-                'grupo_economico': value[1],
-                'servico': value[2],
-                'variavel': value[3],
-                'valor': value[4],
-                'arquivo_origem': value[5],
-                'linha_origem': value[6],
-                'hash_registro': value[7]
+                'ano_mes': record.ano_mes,
+                'grupo_economico': record.grupo_economico,
+                'servico': record.servico,
+                'variavel': record.variavel,
+                'valor': record.valor,
+                'arquivo_origem': record.arquivo_origem,
+                'linha_origem': record.linha_origem,
+                'hash_registro': record.generate_hash()
             }
             cursor.execute(insert_query, params)
             if cursor.rowcount == 0:
@@ -609,16 +541,17 @@ class PostgreSQLLoader:
         
         return inserted
 
-
     def _ensure_dimensions(self, cursor, records: List[DataRecord]) -> None:
         """Garante que todas as entradas de dimensão existam"""
         from datetime import datetime
+        
         # Nomes de meses em português
         month_names = {
             1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril',
             5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto',
             9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'
         }
+        
         # Coleta valores únicos
         tempos = set(r.ano_mes for r in records)
         grupos = set(r.grupo_economico for r in records)
@@ -674,14 +607,19 @@ class PostgreSQLLoader:
                 (var, var)
             )
 
-        return None
 
 class ETLPipeline:
-    """Orquestrador do pipeline ETL completo.
+    """Orquestrador do pipeline ETL completo com download via API.
     
-    Coordena a execução das etapas de extração, transformação e carga,
-    garantindo a execução ordenada e tratamento de erros.
+    Baixa e processa arquivos diretamente na memória, sem 
+    necessidade de armazenamento em disco.
     """
+    
+    # Configurações da API dados.gov.br
+    BASE_URL = "https://dados.gov.br/dados/api/publico"
+    CONJUNTO_IDA_ID = "63a9c9f6-9991-48b4-a072-ce22765652e6"
+    SERVICOS_ALVO = ["SMP", "STFC", "SCM"]
+    ANOS_ALVO = [2017, 2018, 2019]
     
     def __init__(self, config: Optional[ETLConfig] = None):
         """Inicializa o pipeline.
@@ -691,74 +629,166 @@ class ETLPipeline:
         """
         self.config = config or ETLConfig()
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.headers = {"chave-api-dados-abertos": self.config.api_key}
         self.extractor = ODSExtractor(self.config)
         self.transformer = DataTransformer(self.config)
         self.loader = PostgreSQLLoader(self.config)
     
+    def _requisicao_api(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
+        """Faz request na API com tratamento de erro."""
+        url = f"{self.BASE_URL}/{endpoint}"
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            self.logger.error(f"Erro API {url}: {e}")
+            return None
+    
+    def _extrair_info_recurso(self, recurso_raw: Dict) -> Optional[RecursoIDA]:
+        """Extrai informações relevantes do recurso."""
+        titulo = recurso_raw.get('titulo', '')
+        
+        # Busca ano no título
+        ano = None
+        for a in self.ANOS_ALVO:
+            if str(a) in titulo:
+                ano = a
+                break
+        
+        # Busca serviço no título  
+        servico = None
+        for s in self.SERVICOS_ALVO:
+            if s in titulo.upper():
+                servico = s
+                break
+        
+        if not (ano and servico):
+            return None
+            
+        return RecursoIDA(
+            id=recurso_raw.get('id', ''),
+            titulo=titulo,
+            url=recurso_raw.get('link', '').replace('\\', '/'),
+            formato=recurso_raw.get('formato', ''),
+            ano=ano,
+            servico=servico
+        )
+    
+    def _baixar_arquivo_memoria(self, recurso: RecursoIDA) -> Optional[BytesIO]:
+        """Baixa arquivo diretamente para memória."""
+        if not recurso.url:
+            self.logger.warning(f"URL vazia para recurso: {recurso.titulo}")
+            return None
+        
+        try:
+            self.logger.info(f"Baixando para memória: {recurso.titulo}")
+            response = requests.get(recurso.url, timeout=60)
+            response.raise_for_status()
+            
+            # Retorna conteúdo em memória
+            return BytesIO(response.content)
+            
+        except Exception as e:
+            self.logger.error(f"Erro ao baixar {recurso.titulo}: {e}")
+            return None
+    
     def run(self) -> Dict[str, Any]:
         """Executa o pipeline ETL completo.
         
-        Processa todos os arquivos ODS encontrados no diretório de dados,
-        realizando extração, transformação e carga para cada um.
+        Baixa e processa arquivos diretamente na memória.
         
         Returns:
             Dict[str, Any]: Estatísticas da execução
         """
-        self.logger.info("Iniciando pipeline ETL IDA")
+        self.logger.info("========== INICIANDO PIPELINE ETL IDA ==========")
         start_time = datetime.now()
         
         stats = {
-            'files_processed': 0,
-            'records_extracted': 0,
-            'records_transformed': 0,
-            'records_loaded': 0,
-            'errors': []
+            'recursos_processados': 0,
+            'registros_extraidos': 0,
+            'registros_transformados': 0,
+            'registros_carregados': 0,
+            'erros': []
         }
         
-        # Lista arquivos ODS no diretório
-        data_path = Path(self.config.data_path)
-        ods_files = list(data_path.glob("*.ods"))
-        
-        if not ods_files:
-            self.logger.warning(f"Nenhum arquivo ODS encontrado em {data_path}")
+        # Busca recursos na API
+        self.logger.info("ETAPA 1: Consultando recursos na API dados.gov.br")
+        dados = self._requisicao_api(f"conjuntos-dados/{self.CONJUNTO_IDA_ID}")
+        if not dados:
+            self.logger.error("Falha ao obter dados do conjunto IDA")
             return stats
         
-        # Processa cada arquivo com o loader
+        # Filtra recursos relevantes
+        recursos_brutos = dados.get('recursos', [])
+        recursos_filtrados = []
+        
+        for recurso_raw in recursos_brutos:
+            recurso = self._extrair_info_recurso(recurso_raw)
+            if recurso:
+                recursos_filtrados.append(recurso)
+                self.logger.info(f"Recurso encontrado: {recurso.servico} {recurso.ano}")
+        
+        self.logger.info(f"Total de recursos para processar: {len(recursos_filtrados)}")
+        
+        # Processa cada recurso
+        self.logger.info("ETAPA 2: Processando recursos")
+        all_records = []
+        
         with self.loader:
-            for file_path in ods_files:
+            for recurso in recursos_filtrados:
                 try:
-                    self.logger.info(f"Processando arquivo: {file_path}")
+                    # Baixa arquivo para memória
+                    file_content = self._baixar_arquivo_memoria(recurso)
+                    if not file_content:
+                        continue
                     
-                    # Extração
-                    df = self.extractor.extract(str(file_path))
-                    stats['records_extracted'] += len(df)
+                    # Extrai dados
+                    metadata = {
+                        'filename': f"{recurso.servico}_{recurso.ano}.ods",
+                        'servico': recurso.servico
+                    }
+                    df = self.extractor.extract(file_content, metadata)
+                    stats['registros_extraidos'] += len(df)
                     
-                    # Transformação
+                    # Transforma dados
                     records = self.transformer.transform(df)
-                    stats['records_transformed'] += len(records)
+                    stats['registros_transformados'] += len(records)
+                    all_records.extend(records)
                     
-                    # Carga
-                    loaded = self.loader.load(records)
-                    stats['records_loaded'] += loaded
+                    # Carrega no banco em lotes para não acumular muita memória
+                    if len(all_records) >= self.config.batch_size * 5:
+                        loaded = self.loader.load(all_records)
+                        stats['registros_carregados'] += loaded
+                        all_records = []  # Limpa lista
                     
-                    stats['files_processed'] += 1
+                    stats['recursos_processados'] += 1
+                    self.logger.info(f"Recurso {recurso.servico} {recurso.ano}: {len(records)} registros")
                     
                 except Exception as e:
-                    error_msg = f"Erro ao processar {file_path}: {str(e)}"
+                    error_msg = f"Erro ao processar {recurso.titulo}: {str(e)}"
                     self.logger.error(error_msg)
-                    stats['errors'].append(error_msg)
+                    stats['erros'].append(error_msg)
+            
+            # Carrega registros restantes
+            if all_records:
+                self.logger.info(f"ETAPA 3: Carregando {len(all_records)} registros restantes")
+                loaded = self.loader.load(all_records)
+                stats['registros_carregados'] += loaded
         
         # Finaliza e reporta estatísticas
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
+        self.logger.info("========== PIPELINE FINALIZADO ==========")
         self.logger.info(
-            f"Pipeline ETL finalizado em {duration:.2f} segundos\n"
-            f"Arquivos processados: {stats['files_processed']}\n"
-            f"Registros extraídos: {stats['records_extracted']}\n"
-            f"Registros transformados: {stats['records_transformed']}\n"
-            f"Registros carregados: {stats['records_loaded']}\n"
-            f"Erros: {len(stats['errors'])}"
+            f"Duração: {duration:.2f} segundos\n"
+            f"Recursos processados: {stats['recursos_processados']}\n"
+            f"Registros extraídos: {stats['registros_extraidos']}\n"
+            f"Registros transformados: {stats['registros_transformados']}\n"
+            f"Registros carregados: {stats['registros_carregados']}\n"
+            f"Erros: {len(stats['erros'])}"
         )
         
         return stats
@@ -775,8 +805,13 @@ def main():
         pipeline = ETLPipeline()
         stats = pipeline.run()
         
+        # Verifica se houve sucesso
+        if stats['registros_carregados'] == 0 and stats['registros_transformados'] > 0:
+            logging.error("ATENÇÃO: Dados foram processados mas não foram carregados!")
+            logging.error("Verifique se o schema 'ida' existe no banco de dados")
+        
         # Retorna código de saída baseado em erros
-        if stats['errors']:
+        if stats['erros']:
             sys.exit(1)
         else:
             sys.exit(0)
