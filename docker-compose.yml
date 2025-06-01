@@ -37,5 +37,11 @@ services:
       - ./docs:/docs
     ports:
       - "8080:8080"
+    restart: unless-stopped
     command: >
-      sh -c "python -m pydoc -w etl_ida && mv etl_ida.html /docs/ && python -m pydoc -p 8080 etl_ida"
+      sh -c "\
+        python -m pydoc -w etl_ida &&\
+        mv etl_ida.html /docs/ &&\
+        cd /docs &&\
+        python -m http.server 8080\
+      "
