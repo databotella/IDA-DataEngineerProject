@@ -21,7 +21,7 @@ Exemplo de uso:
     >>> pipeline = ETLPipeline()
     >>> pipeline.run()
 
-Autor: beAnalytic Team
+Autor: Henrique Botella
 Data: 2024
 Versão: 2.0.0
 """
@@ -74,7 +74,7 @@ class ETLConfig:
     db_connection_string: str = "postgresql://postgres:postgres@postgres:5432/idadatamart"
     batch_size: int = 1000
     max_retries: int = 3
-    api_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJVZ0lfQkVMbkdHakM3eGl5d3pOQWRfWHRDODdaX0NXQmdNQnBObVB0ZktBeW85QmRVZGdTemF6N1hmT2tEako4cGlQQTVtaUViYmpQNEFYOSIsImlhdCI6MTc0ODcwMjM3N30.w-TGAteMgx2tW8O-UO_1XWjR4TZMgqAtFMbvWeE1VUo"
+    api_key: str = os.environ.get("API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJVZ0lfQkVMbkdHakM3eGl5d3pOQWRfWHRDODdaX0NXQmdNQnBObVB0ZktBeW85QmRVZGdTemF6N1hmT2tEako4cGlQQTVtaUViYmpQNEFYOSIsImlhdCI6MTc0ODcwMjM3N30.w-TGAteMgx2tW8O-UO_1XWjR4TZMgqAtFMbvWeE1VUo")
 
 
 @dataclass
