@@ -1,10 +1,12 @@
 services:
   postgres:
     image: postgres:17.5-bookworm
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: idadatamart
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - ./init_db.py:/docker-entrypoint-initdb.d/init_db.py
       - ./schema_star.sql:/schema_star.sql

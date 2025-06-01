@@ -10,9 +10,9 @@ DROP SCHEMA IF EXISTS ida CASCADE;
 CREATE SCHEMA ida;
 SET search_path TO ida, public;
 
--- ====================================================================
+
 -- DIMENSÕES
--- ====================================================================
+
 
 -- Dimensão Tempo
 DROP TABLE IF EXISTS dim_tempo CASCADE;
@@ -74,9 +74,9 @@ DROP INDEX IF EXISTS idx_variavel_principal;
 CREATE UNIQUE INDEX idx_variavel_codigo ON dim_variavel(variavel_codigo);
 CREATE INDEX idx_variavel_principal ON dim_variavel(is_principal);
 
--- ====================================================================
+
 -- FATO
--- ====================================================================
+
 
 DROP TABLE IF EXISTS fact_ida CASCADE;
 CREATE TABLE fact_ida (
@@ -100,9 +100,9 @@ CREATE INDEX idx_fact_ida_metrica_principal ON fact_ida(variavel_key, tempo_key,
 CREATE INDEX idx_fact_ida_tempo_grupo ON fact_ida(tempo_key, grupo_key);
 CREATE INDEX idx_fact_ida_arquivo ON fact_ida(arquivo_origem);
 
--- ====================================================================
+
 -- VIEW PRINCIPAL
--- ====================================================================
+
 
 DROP VIEW IF EXISTS vw_taxa_variacao;
 CREATE OR REPLACE VIEW vw_taxa_variacao AS
@@ -192,9 +192,8 @@ COMMENT ON COLUMN ida.vw_taxa_variacao.nextel IS
   'Diferença entre a variação de NEXTEL e a taxa_variacao_media';
 COMMENT ON COLUMN ida.vw_taxa_variacao.sercomtel IS
   'Diferença entre a variação de SERCOMTEL e a taxa_variacao_media';
--- ====================================================================
+
 -- DADOS INICIAIS
--- ====================================================================
 
 INSERT INTO dim_tempo (ano_mes, ano, mes, mes_nome, trimestre, semestre) VALUES
 ('2017-01-01',2017,1,'Janeiro',1,1),

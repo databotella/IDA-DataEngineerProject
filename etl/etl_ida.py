@@ -71,10 +71,22 @@ class ETLConfig:
         max_retries: Número máximo de tentativas em caso de erro
         api_key: Chave de API para dados.gov.br
     """
-    db_connection_string: str = "postgresql://postgres:postgres@postgres:5432/idadatamart"
-    batch_size: int = 1000
-    max_retries: int = 3
-    api_key: str = os.environ.get("API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJVZ0lfQkVMbkdHakM3eGl5d3pOQWRfWHRDODdaX0NXQmdNQnBObVB0ZktBeW85QmRVZGdTemF6N1hmT2tEako4cGlQQTVtaUViYmpQNEFYOSIsImlhdCI6MTc0ODcwMjM3N30.w-TGAteMgx2tW8O-UO_1XWjR4TZMgqAtFMbvWeE1VUo")
+    db_host: str = os.environ.get("DB_HOST")
+    db_port: str = os.environ.get("DB_PORT")
+    db_name: str = os.environ.get("DB_NAME")
+    db_user: str = os.environ.get("DB_USER")
+    db_password: str = os.environ.get("DB_PASSWORD")
+    batch_size: int = int(os.environ.get("BATCH_SIZE", "1000"))
+    max_retries: int = int(os.environ.get("MAX_RETRIES", "3"))
+    api_key: str = os.environ.get("API_KEY", "")
+    log_level: str = os.environ.get("LOG_LEVEL", "INFO")
+
+    @property
+    def db_connection_string(self) -> str:
+        return (
+            f"postgresql://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
 
 
 @dataclass
