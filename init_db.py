@@ -9,7 +9,7 @@ import sys
 from urllib.parse import urlparse, urlunparse
 import psycopg2
 from psycopg2 import sql
-from python_etl_ida import ETLConfig
+from etl_ida_sysint import ETLConfig
 
 def main():
     config = ETLConfig()
