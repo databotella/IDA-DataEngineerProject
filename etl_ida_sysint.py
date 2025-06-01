@@ -615,6 +615,29 @@ class ETLPipeline:
     necessidade de armazenamento em disco.
     """
     
+    def check_database_health(self) -> bool:
+        """Verifica se o banco está acessível e com schema correto."""
+        try:
+            conn = psycopg2.connect(self.config.db_connection_string)
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'ida';")
+            if not cur.fetchone():
+                self.logger.error("Schema 'ida' não encontrado.")
+                cur.close()
+                conn.close()
+                return False
+            required_tables = ['dim_tempo', 'dim_grupo_economico', 'fact_ida']
+            for table in required_tables:
+                cur.execute(f"SELECT 1 FROM ida.{table} LIMIT 1;")
+            cur.close()
+            conn.close()
+            self.logger.info("Database health check passed.")
+            return True
+        except Exception as e:
+            self.logger.error(f"Database health check failed: {e}")
+            return False
+
     # Configurações da API dados.gov.br
     BASE_URL = "https://dados.gov.br/dados/api/publico"
     CONJUNTO_IDA_ID = "63a9c9f6-9991-48b4-a072-ce22765652e6"
@@ -712,6 +735,11 @@ class ETLPipeline:
             'registros_carregados': 0,
             'erros': []
         }
+        # Verificação de saúde do banco antes da extração
+        self.logger.info("ETAPA 0: Verificando saúde do banco de dados")
+        if not self.check_database_health():
+            self.logger.error("Falha na verificação de saúde do banco. Abortando pipeline.")
+            return stats
         
         # Busca recursos na API
         self.logger.info("ETAPA 1: Consultando recursos na API dados.gov.br")
