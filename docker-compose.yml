@@ -44,8 +44,8 @@ services:
     restart: unless-stopped
     command: >
       sh -c "\
-        python -m pydoc -w etl_ida &&\
-        mv etl_ida.html /docs/ &&\
+        python -m pydoc -w etl_ida init_db &&\
+        mv etl_ida.html init_db.html /docs/ &&\
         cd /docs &&\
         python -m http.server 8080\
       "

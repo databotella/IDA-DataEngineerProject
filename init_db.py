@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Script de inicialização do banco de dados `idadatamart` e schema `ida`
-com base no arquivo schema_star.sql.
+init_db — Inicializa e aplica o schema do banco idadatamart.
+
+Description:
+    Fecha conexões ativas em idadatamart, dropa o database, recria-o e
+    executa todos os comandos definidos em schema_star.sql (ignorando
+    comentários e comandos psql).
+
+Example:
+    $ python init_db.py
+
+Raises:
+    SystemExit: Se houver erro na conexão ou na execução dos comandos.
 """
 
 import sys
@@ -12,6 +22,18 @@ from psycopg2 import sql
 from etl_ida import ETLConfig
 
 def main():
+    """
+    Executa o processo de criação do database e aplicação do schema.
+
+    Args:
+        None
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: Em caso de erro na conexão ou na execução dos comandos SQL.
+    """
     config = ETLConfig()
     # Parsear DSN original
     parsed = urlparse(config.db_connection_string)
