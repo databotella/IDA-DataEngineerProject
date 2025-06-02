@@ -36,16 +36,22 @@ services:
       sh -c "pip install -r requirements.txt && python init_db.py && python etl_ida.py"
 
   docs:
-    build: ./etl
+    image: python:3.11.12-bookworm
+    env_file:
+      - .env
     volumes:
+      - ./:/app
       - ./docs:/docs
+    working_dir: /app
     ports:
-      - "8080:8080"
+      - "8756:8080"
     restart: unless-stopped
     command: >
       sh -c "\
-        python -m pydoc -w etl_ida init_db &&\
-        mv etl_ida.html init_db.html /docs/ &&\
-        cd /docs &&\
+        pip install -r requirements.txt && \
+        python -m pydoc -w etl.etl_ida init_db && \
+        mv etl.etl_ida.html /docs/etl_ida.html && \
+        mv init_db.html /docs/init_db.html && \
+        cd /docs && \
         python -m http.server 8080\
       "
