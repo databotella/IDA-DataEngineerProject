@@ -31,7 +31,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     command: >
-      sh -c "pip install -r requirements.txt && python init_db.py && python etl_ida.py"
+      sh -c "pip install -r requirements.txt && python init_db.py && python -m etl.etl_ida"
 
   docs:
     image: python:3.11.12-bookworm
