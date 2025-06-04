@@ -5,8 +5,13 @@ init_db — Inicializa e aplica o schema do banco idadatamart.
 
 Description:
     Fecha conexões ativas em idadatamart, dropa o database, recria-o e
-    executa todos os comandos definidos em schema_star.sql (ignorando
-    comentários e comandos psql).
+    aplica todas as definições e dados do schema em 'schema_star.sql'.
+
+    O script lê o arquivo SQL, divide os comandos por ponto-e-vírgula (';'),
+    descarta comentários (linhas iniciadas com '--') e metacomandos psql
+    (linhas iniciadas com '\\'), e executa cada comando em sequência.
+    Para cada SQL executado, uma mensagem é impressa; em caso de erro,
+    o comando exato que falhou e o erro são destacados.
 
 Example:
     $ python init_db.py
@@ -23,8 +28,18 @@ from etl_ida import ETLConfig
 
 def main():
     """
-    Executa o processo de criação do database e aplicação do schema.
+    Executa o processo de criação do database e aplicação do schema a partir de 'schema_star.sql'.
 
+    Fluxo:
+        1. Conecta ao banco 'postgres' e encerra conexões ativas no 'idadatamart'.
+        2. Dropa e recria o database 'idadatamart'.
+        3. Reconnecta ao 'idadatamart' via psycopg2.
+        4. Abre 'schema_star.sql', parseia o conteúdo:
+           - Divide por ';' para separar comandos.
+           - Remove linhas vazias, comentários ('--') e metacomandos psql ('\\').
+        5. Executa cada comando em sequência, imprimindo na saída:
+           - o SQL executado.
+           - em caso de falha, exibe 'SQL FALHOU:' seguido do comando e do erro.
     Args:
         None
 
@@ -32,7 +47,7 @@ def main():
         None
 
     Raises:
-        SystemExit: Em caso de erro na conexão ou na execução dos comandos SQL.
+        SystemExit: Se houver erro na conexão ou na execução dos comandos.
     """
     config = ETLConfig()
     # Parsear DSN original
@@ -89,7 +104,7 @@ def main():
         try:
             cur2.execute(cmd)
         except Exception as e:
-            print(f"Erro ao executar comando:\n{cmd}\n{e}")
+            print(f"SQL FALHOU: {cmd}\nErro: {e}")
     cur2.close()
     conn2.close()
     print("Inicialização concluída com sucesso.")
