@@ -26,9 +26,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./etl:/app
-      - ./init_db.py:/app/init_db.py
-      - ./schema_star.sql:/app/schema_star.sql
+      - ./:/app
     working_dir: /app
     environment:
       - PYTHONUNBUFFERED=1

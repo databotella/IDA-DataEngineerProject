@@ -24,7 +24,7 @@ import sys
 from urllib.parse import urlparse, urlunparse
 import psycopg2
 from psycopg2 import sql
-from etl.etl_ida import ETLConfig
+from etl_ida import ETLConfig
 
 def main():
     """
